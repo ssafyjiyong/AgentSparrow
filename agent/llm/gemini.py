@@ -1,7 +1,11 @@
 """
 Google Gemini LLM 클라이언트
 - SDK: google-genai (신 버전)
-- validate_key: models.list() 사용 (할당량 소모 없음)
+- 공식 예시 패턴:
+    from google import genai
+    client = genai.Client(api_key=...)
+    response = client.models.generate_content(model=..., contents=...)
+- validate_key: 짧은 generate_content 호출로 확인 (models.list 전체 로드 방지)
 """
 from agent.llm.base import LLMClient
 from agent.llm.prompts import (
@@ -15,7 +19,7 @@ from agent.llm.prompts import (
 class GeminiClient(LLMClient):
     """Google Gemini API 클라이언트 (google-genai SDK)"""
 
-    MODEL = "gemini-2.0-flash-lite"
+    MODEL = "gemini-3-flash-preview"
 
     def __init__(self, api_key: str):
         super().__init__(api_key)
@@ -31,12 +35,16 @@ class GeminiClient(LLMClient):
     def validate_key(self) -> bool:
         """
         Gemini API 키 유효성 검증.
-        models.list() 호출로 확인 (할당량 소모 없음).
+        짧은 generate_content 호출로 확인합니다.
+        (models.list() 전체 페이지 로드 방지)
         """
         try:
             client = self._get_client()
-            models = list(client.models.list())
-            return len(models) > 0
+            response = client.models.generate_content(
+                model=self.MODEL,
+                contents="hi",
+            )
+            return bool(response.text)
         except Exception:
             return False
 

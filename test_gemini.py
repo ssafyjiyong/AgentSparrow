@@ -4,7 +4,8 @@ sys.path.insert(0, '.')
 from agent.config import LLMProvider
 from agent.llm.base import create_llm_client
 
-API_KEY = 'AIzaSyCbpCzIPkMJ0op2L9KCMp7T7M90h8yQdqA'
+import os
+API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyD9UUFI6PH_mARsZ3qxXmNrGf6T-ijaZo0")
 
 print('Testing GeminiClient.validate_key() ...')
 client = create_llm_client(LLMProvider.GEMINI, API_KEY)
