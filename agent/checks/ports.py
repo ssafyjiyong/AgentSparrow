@@ -1,21 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-?�트 충돌 검??
-- ?��? ?�???�트�??�캔?�여 ?�용 중인 ?�트�??�별
+포트 충돌 검사
+- 필수 포트를 스캔하여 사용 중인 포트를 식별
 """
 import socket
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-
 from agent.config import REQUIRED_PORTS
-
-console = Console(force_terminal=True, legacy_windows=False)
 
 
 def _is_port_in_use(port: int, host: str = "localhost") -> bool:
-    """?�정 ?�트가 ?�용 중인지 ?�인?�니??"""
+    """지정 포트가 사용 중인지 확인합니다."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(1)
         result = sock.connect_ex((host, port))
@@ -24,12 +18,12 @@ def _is_port_in_use(port: int, host: str = "localhost") -> bool:
 
 def check_ports() -> bool:
     """
-    ?�수 ?�트???�용 ?��?�?검?�합?�다.
-    ?�용 중인 ?�트가 ?�으�?False�?반환?�니??
+    필수 포트의 사용 여부를 검사합니다.
+    사용 중인 포트가 있으면 False를 반환합니다.
 
     Returns:
-        True: 모든 ?�트가 ?�용 가??
-        False: ?�나 ?�상???�트가 ?�용 �?
+        True: 모든 포트가 사용 가능
+        False: 하나 이상의 포트가 사용 중
     """
     occupied_ports = []
 
@@ -38,32 +32,18 @@ def check_ports() -> bool:
             occupied_ports.append(port)
 
     if occupied_ports:
-        # ?�트 충돌 ?�이�?출력
-        table = Table(
-            title="[WARN] ?�트 충돌 감�?",
-            show_header=True,
-            header_style="bold red",
-        )
-        table.add_column("?�트", style="cyan", justify="center")
-        table.add_column("?�태", style="red", justify="center")
-
+        print()
+        print("  [WARN] 포트 충돌 감지")
+        print("  " + "-" * 40)
         for port in occupied_ports:
-            table.add_row(str(port), "[X] ?�용 �?)
-
-        console.print(table)
-        console.print()
-
+            print(f"  [X] 포트 {port} - 사용 중")
+        print("  " + "-" * 40)
+        print()
         for port in occupied_ports:
-            console.print(Panel(
-                f"[bold red][ERROR] ?�트 {port}가 ?��? ?�용 중입?�다. "
-                f"?�유 중인 ?�로?�스�?종료?�세??[/bold red]",
-                border_style="red",
-            ))
-
+            print(f"  [ERROR] 포트 {port}가 이미 사용 중입니다.")
+            print(f"         점유 중인 프로세스를 종료하세요.")
+        print()
         return False
 
-    console.print(
-        f"  [ OK ] ?�트 충돌 검???�료 ({len(REQUIRED_PORTS)}�??�트 모두 ?�용 가??",
-        style="green",
-    )
+    print(f"  [ OK ] 포트 충돌 검사 완료 ({len(REQUIRED_PORTS)}개 포트 모두 사용 가능)")
     return True

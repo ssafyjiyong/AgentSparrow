@@ -1,23 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-sparrow.properties ?�동 구성
-- ?�트?�크 ?�정 (IP 주입)
-- ?�어 �?관리자 ?�정
-- 모듈 비활?�화
-- 멱등??보장
+sparrow.properties 자동 구성
+- 네트워크 설정 (IP 주입)
+- 언어 및 관리자 설정
+- 모듈 비활성화
+- 멱등성 보장
 """
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
-
 from agent.config import AgentConfig, Language, DISABLED_MODULES, OPTIONAL_MODULES
-
-console = Console(force_terminal=True, legacy_windows=False)
 
 
 class PropertiesManager:
-    """sparrow.properties ?�일 관리자 (멱등??보장)"""
+    """sparrow.properties 파일 관리자 (멱등성 보장)"""
 
     def __init__(self, file_path: Path):
         self.file_path = file_path
@@ -26,7 +22,6 @@ class PropertiesManager:
         self._load()
 
     def _load(self):
-        """?�일???�어 lines?� properties ?�셔?�리�??�싱?�니??"""
         if self.file_path.exists():
             with open(self.file_path, "r", encoding="utf-8") as f:
                 self.lines = f.readlines()
@@ -38,49 +33,31 @@ class PropertiesManager:
                     self._properties[key.strip()] = value.strip()
 
     def get(self, key: str) -> Optional[str]:
-        """?�성값을 가?�옵?�다."""
         return self._properties.get(key)
 
     def has(self, key: str) -> bool:
-        """?�성??존재?�는지 ?�인?�니??"""
         return key in self._properties
 
     def set(self, key: str, value: str) -> bool:
-        """
-        ?�성???�정?�니?? ?��? 존재?�면 값을 ?�데?�트?�고,
-        ?�으�??�일 ?�에 추�??�니??
-
-        Returns:
-            True: 변경됨, False: ?��? ?�일??�?
-        """
         if self.has(key) and self.get(key) == value:
-            return False  # 멱등?? ?��? ?�일??�?
+            return False
 
         if self.has(key):
-            # 기존 ?�인 ?�데?�트
             for i, line in enumerate(self.lines):
                 stripped = line.strip()
                 if stripped.startswith(f"{key}=") or stripped.startswith(f"{key} ="):
                     self.lines[i] = f"{key}={value}\n"
                     break
         else:
-            # ???�인 추�?
             self.lines.append(f"{key}={value}\n")
 
         self._properties[key] = value
         return True
 
     def prepend(self, key: str, value: str) -> bool:
-        """
-        ?�성???�일 최상?�에 ?�입?�니??(?��? 존재?�면 ?�킵).
-
-        Returns:
-            True: 추�??? False: ?��? 존재 (멱등??
-        """
         if self.has(key):
             if self.get(key) == value:
-                return False  # 멱등?? ?��? ?�일??�?
-            # 값이 ?�르�??�데?�트
+                return False
             return self.set(key, value)
 
         self.lines.insert(0, f"{key}={value}\n")
@@ -88,120 +65,79 @@ class PropertiesManager:
         return True
 
     def save(self):
-        """변경사??�� ?�일???�?�합?�다."""
         with open(self.file_path, "w", encoding="utf-8") as f:
             f.writelines(self.lines)
 
 
 def patch_properties(config: AgentConfig) -> bool:
     """
-    sparrow.properties ?�일???�동 ?�치?�니??
-
-    1. ?�트?�크: 로컬 IP ??service.host, service.public.host
-    2. ?�어: en/ja ?�택 ??install.administrator.id, install.locale ?�입
-    3. 모듈: 강제 비활?�화 ?�정
-
-    Args:
-        config: ?�이?�트 ?�정 (base_dir, local_ip, language ?�요)
+    sparrow.properties 파일을 자동 패치합니다.
 
     Returns:
-        True: ?�공
-        False: ?�패
+        True: 성공
+        False: 실패
     """
     if not config.base_dir:
-        console.print("  [FAIL] BASE_DIR???�정?��? ?�았?�니??", style="red")
+        print("  [FAIL] BASE_DIR이 설정되지 않았습니다.")
         return False
 
     props_path = config.base_dir / "sparrow.properties"
     if not props_path.exists():
-        console.print(
-            f"  [FAIL] sparrow.properties ?�일??찾을 ???�습?�다: {props_path}",
-            style="red",
-        )
+        print(f"  [FAIL] sparrow.properties 파일을 찾을 수 없습니다: {props_path}")
         return False
 
     try:
         pm = PropertiesManager(props_path)
         changes_made = 0
 
-        # ?�?� 1. ?�트?�크 ?�정 ?�?�
+        # 단계 1. 네트워크 설정 적용
         if config.local_ip:
             if pm.set("service.host", config.local_ip):
                 changes_made += 1
-                console.print(
-                    f"  [NET] service.host = {config.local_ip}",
-                    style="cyan",
-                )
+                print(f"  [NET] service.host = {config.local_ip}")
             if pm.set("service.public.host", config.local_ip):
                 changes_made += 1
-                console.print(
-                    f"  [NET] service.public.host = {config.local_ip}",
-                    style="cyan",
-                )
+                print(f"  [NET] service.public.host = {config.local_ip}")
         else:
-            console.print(
-                "  [WARN] 로컬 IP가 ?�정?��? ?�아 ?�트?�크 ?�정??건너?�니??",
-                style="yellow",
-            )
+            print("  [WARN] 로컬 IP가 설정되지 않아 네트워크 설정을 건너뜁니다.")
 
-        # ?�?� 2. ?�어 �?관리자 ?�정 ?�?�
+        # 단계 2. 언어 및 관리자 설정 적용
         if config.language in (Language.EN, Language.JA):
             locale_value = config.language.value
             if pm.prepend("install.locale", locale_value):
                 changes_made += 1
-                console.print(
-                    f"  [LANG] install.locale = {locale_value}",
-                    style="cyan",
-                )
+                print(f"  [LANG] install.locale = {locale_value}")
             if pm.prepend("install.administrator.id", "admin"):
                 changes_made += 1
-                console.print(
-                    "  [USER] install.administrator.id = admin",
-                    style="cyan",
-                )
+                print("  [USER] install.administrator.id = admin")
         else:
-            console.print(
-                "  [LANG] ?�국??ko) ?�택: 기본 ?�어 ?�정 ?��?",
-                style="dim",
-            )
+            print("  [LANG] 한국어(ko) 선택: 기본 언어 설정 유지")
 
-        # ?�?� 3. 모듈 강제 비활?�화 ?�?�
+        # 단계 3. 모듈 강제 비활성화 적용
         for module_key, module_value in DISABLED_MODULES.items():
             if pm.set(module_key, module_value):
                 changes_made += 1
-                console.print(
-                    f"  [CFG] {module_key} = {module_value}",
-                    style="cyan",
-                )
+                print(f"  [CFG] {module_key} = {module_value}")
 
-        # ?�?� 4. ?�택??모듈 (sast / dast / sca) ?�?�
-        console.print(
-            "  [CFG] ?�택 모듈 ?�정:",
-            style="bold",
-        )
+        # 단계 4. 선택적 모듈 (sast / dast / sca) 적용
+        print("  [CFG] 선택 모듈 설정:")
         for module in OPTIONAL_MODULES:
             key = f"service.{module}.enabled"
             value = "true" if module in config.enabled_optional_modules else "false"
             if pm.set(key, value):
                 changes_made += 1
-            status = "[green]true [/green] (ON) " if value == "true" else "[dim]false (OFF)[/dim]"
-            console.print(f"  [CFG]   {key} = {status}", style="cyan")
+            status = "ON " if value == "true" else "OFF"
+            print(f"  [CFG]   {key} = {value} ({status})")
 
         pm.save()
 
         if changes_made > 0:
-            console.print(
-                f"  [ OK ] sparrow.properties ?�치 ?�료 ({changes_made}�???�� 변�?",
-                style="green",
-            )
+            print(f"  [ OK ] sparrow.properties 패치 완료 ({changes_made}개 항목 변경)")
         else:
-            console.print(
-                "  [ OK ] sparrow.properties ?��? 최신 ?�태 (변�??�음)",
-                style="green",
-            )
+            print("  [ OK ] sparrow.properties 이미 최신 상태 (변경 없음)")
 
         return True
 
     except Exception as e:
-        console.print(f"  [FAIL] Properties ?�치 ?�패: {e}", style="red")
+        print(f"  [FAIL] Properties 패치 실패: {e}")
         return False

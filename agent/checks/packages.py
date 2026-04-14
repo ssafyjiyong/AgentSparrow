@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-?�수 ?�키지 ?�인
-- Windows: prerequisite ?�더 ??vc_redist.x64.exe ?�인 ???�치
+필수 패키지 확인
+- Windows: prerequisite 폴더 내 vc_redist.x64.exe 확인 및 설치
 - Linux: unzip, fontconfig, libtinfo.so.5, libldap_r-2.4.so.2
 """
 import subprocess
 import shutil
-import platform
 from pathlib import Path
 from typing import Optional
-
-from rich.console import Console
-from rich.panel import Panel
 
 from agent.config import (
     AgentConfig,
@@ -19,23 +15,15 @@ from agent.config import (
     LINUX_REQUIRED_LIBS,
 )
 
-console = Console(force_terminal=True, legacy_windows=False)
-
 
 def _find_vc_redist(config: AgentConfig) -> Optional[Path]:
-    """
-    prerequisite ?�더?�서 vc_redist.x64.exe�?먼�? 찾고,
-    ?�으�?base_dir ?�체?�서 ?��? ?�색?�니??
-    """
     if not config.base_dir:
         return None
 
-    # 1?�위: prerequisite ?�더 (PRD 명세)
     prerequisite_path = config.base_dir / "prerequisite" / "vc_redist.x64.exe"
     if prerequisite_path.exists():
         return prerequisite_path
 
-    # 2?�위: ?�체 ?��? ?�색
     for pattern in ["vc_redist.x64.exe", "vc_redist*.exe"]:
         found = list(config.base_dir.rglob(pattern))
         if found:
@@ -45,9 +33,6 @@ def _find_vc_redist(config: AgentConfig) -> Optional[Path]:
 
 
 def _check_vc_redist_installed() -> bool:
-    """
-    Windows ?��??�트리에??Visual C++ Redistributable ?�치 ?��?�??�인?�니??
-    """
     try:
         import winreg
         keys_to_check = [
@@ -69,38 +54,27 @@ def _check_vc_redist_installed() -> bool:
 
 
 def _install_vc_redist(vc_redist_path: Path) -> bool:
-    """vc_redist.x64.exe�??�동 ?�행?�여 ?�치?�니??"""
-    console.print(
-        f"  >> VC++ Redistributable ?�치 ?�작: {vc_redist_path}",
-        style="cyan",
-    )
+    print(f"  >> VC++ Redistributable 설치 시작: {vc_redist_path}")
     try:
         result = subprocess.run(
             [str(vc_redist_path), "/install", "/quiet", "/norestart"],
             capture_output=True,
             timeout=120,
         )
-        if result.returncode in (0, 3010):  # 0=?�공, 3010=?��????�요?��?�??�공
-            console.print("  [ OK ] VC++ Redistributable ?�치 ?�료", style="green")
+        if result.returncode in (0, 3010):
+            print("  [ OK ] VC++ Redistributable 설치 완료")
             if result.returncode == 3010:
-                console.print(
-                    "  [WARN] ?��??�이 ?�요?????�습?�다. (?�치???�료??",
-                    style="yellow",
-                )
+                print("  [WARN] 재부팅이 필요할 수 있습니다. (설치는 완료됨)")
             return True
         else:
-            console.print(
-                f"  [FAIL] VC++ Redistributable ?�치 ?�패 (exit code: {result.returncode})",
-                style="red",
-            )
+            print(f"  [FAIL] VC++ Redistributable 설치 실패 (exit code: {result.returncode})")
             return False
     except subprocess.TimeoutExpired:
-        console.print("  [FAIL] VC++ Redistributable ?�치 ?�간 초과 (120�?", style="red")
+        print("  [FAIL] VC++ Redistributable 설치 시간 초과 (120초)")
         return False
 
 
 def _check_linux_packages() -> list[str]:
-    """Linux ?�수 ?�키지 �??�락????��??반환?�니??"""
     missing = []
 
     for pkg in LINUX_REQUIRED_PACKAGES:
@@ -123,66 +97,51 @@ def _check_linux_packages() -> list[str]:
 
 def check_packages(config: AgentConfig) -> bool:
     """
-    OS�??�수 ?�키지 ?�치 ?��?�??�인?�니??
-
-    Windows:
-      1. prerequisite/vc_redist.x64.exe 존재 ?��? ?�인
-      2. ?��? ?�치?�어 ?�으�?건너?�
-      3. 미설�???prerequisite ?�더???�일�??�동 ?�치
+    OS별 필수 패키지 설치 여부를 확인합니다.
 
     Returns:
-        True: ?�키지 준�??�료
-        False: 치명???�키지 ?�락?�로 계속 진행 불�?
+        True: 패키지 준비 완료
+        False: 치명적 패키지 누락으로 계속 진행 불가
     """
     if config.is_windows:
-        console.print("  >> VC++ Redistributable ?�치 ?��? ?�인 �?..", style="dim")
+        print("  >> VC++ Redistributable 설치 여부 확인 중...")
 
         if _check_vc_redist_installed():
-            console.print(
-                "  [ OK ] VC++ Redistributable ?��? ?�치?�어 ?�습?�다.",
-                style="green",
-            )
+            print("  [ OK ] VC++ Redistributable 이미 설치되어 있습니다.")
             return True
 
-        console.print(
-            "  [WARN] VC++ Redistributable???�치?�어 ?��? ?�습?�다.",
-            style="yellow",
-        )
+        print("  [WARN] VC++ Redistributable이 설치되어 있지 않습니다.")
 
-        # prerequisite ?�더?�서 찾기
         vc_redist_path = _find_vc_redist(config)
         if vc_redist_path:
-            console.print(
-                f"  >> prerequisite ?�더?�서 발견: {vc_redist_path}",
-                style="cyan",
-            )
+            print(f"  >> prerequisite 폴더에서 발견: {vc_redist_path}")
             return _install_vc_redist(vc_redist_path)
         else:
-            console.print(
-                Panel(
-                    "[bold red]prerequisite/vc_redist.x64.exe ?�일??찾을 ???�습?�다.\n"
-                    "?�동?�로 ?�치 ???�시 ?�행??주세??\n"
-                    "?�운로드: https://aka.ms/vs/17/release/vc_redist.x64.exe[/bold red]",
-                    title="[WARN] VC++ Redistributable ?�락",
-                    border_style="yellow",
-                )
-            )
+            print()
+            print("  [WARN] VC++ Redistributable 누락")
+            print("  " + "-" * 50)
+            print("  prerequisite/vc_redist.x64.exe 파일을 찾을 수 없습니다.")
+            print("  수동으로 설치 후 다시 실행해 주세요.")
+            print("  다운로드: https://aka.ms/vs/17/release/vc_redist.x64.exe")
+            print("  " + "-" * 50)
+            print()
             return False
 
     else:
-        # Linux
-        console.print("  >> Linux ?�수 ?�키지 ?�인 �?..", style="dim")
+        print("  >> Linux 필수 패키지 확인 중...")
         missing = _check_linux_packages()
         if not missing:
-            console.print("  [ OK ] ?�수 ?�키지 ?�치 ?�인 ?�료", style="green")
+            print("  [ OK ] 필수 패키지 설치 확인 완료")
             return True
         else:
-            console.print(Panel(
-                "[bold red]?�음 ?�수 ?�키지가 ?�치?�어 ?��? ?�습?�다:[/bold red]\n\n"
-                + "\n".join(f"  - {pkg}" for pkg in missing) + "\n\n"
-                + "[dim]?�키지 매니?��??�용?�여 ?�치??주세??\n"
-                + f"?? sudo apt install {' '.join(missing)}[/dim]",
-                title="[WARN] ?�키지 ?�락",
-                border_style="yellow",
-            ))
+            print()
+            print("  [WARN] 패키지 누락")
+            print("  " + "-" * 50)
+            print("  다음 필수 패키지가 설치되어 있지 않습니다:")
+            for pkg in missing:
+                print(f"    - {pkg}")
+            print()
+            print(f"  예) sudo apt install {' '.join(missing)}")
+            print("  " + "-" * 50)
+            print()
             return False
