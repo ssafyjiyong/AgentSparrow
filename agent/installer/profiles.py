@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agent.config import AgentConfig, Language
 from agent.llm.base import LLMClient
+from agent.cli import ensure_llm_client
 
 # 한글 유니코드 범위 정규식
 KOREAN_PATTERN = re.compile(r"[\uAC00-\uD7AF]+")
@@ -78,9 +79,12 @@ def _translate_json_values(data, target_lang: str, llm_client: LLMClient):
         return data
 
 
-def patch_profiles(config: AgentConfig, llm_client: LLMClient) -> bool:
+def patch_profiles(config: AgentConfig) -> bool:
     """
     DB 프로파일 및 리포트 파일을 다국어 패치합니다.
+
+    번역이 실제로 필요한 경우(언어가 ko가 아니고 한국어 텍스트가 남아 있는
+    파일이 존재) LLM 클라이언트를 지연 초기화합니다.
 
     Returns:
         True: 성공
@@ -93,6 +97,8 @@ def patch_profiles(config: AgentConfig, llm_client: LLMClient) -> bool:
     if not config.base_dir:
         print("  [FAIL] BASE_DIR이 설정되지 않았습니다.")
         return False
+
+    llm_client: LLMClient | None = None  # 실제 번역 필요 시 지연 초기화
 
     target_lang = config.language.value
     target_dirs = [
@@ -140,6 +146,15 @@ def patch_profiles(config: AgentConfig, llm_client: LLMClient) -> bool:
                     continue
 
             if _contains_korean(content):
+                if llm_client is None:
+                    llm_client = ensure_llm_client(
+                        config,
+                        reason=f"DB 프로파일 {target_lang} 번역",
+                    )
+                    if llm_client is None:
+                        print("  [WARN] LLM 클라이언트 미제공 - 번역을 건너뜁니다.")
+                        total_skipped += 1
+                        continue
                 translated = _translate_content(
                     content, target_lang, llm_client, file_path
                 )

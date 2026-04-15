@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import platform
-from typing import Optional
+from typing import Any, Optional
 
 
 class LLMProvider(Enum):
@@ -82,6 +82,9 @@ class AgentConfig:
     install_dir: Path = Path()
     base_dir: Optional[Path] = None
     local_ip: str = ""
+
+    # 실패 분석 시 지연 초기화되는 LLM 클라이언트 (최초 1회만 프롬프트)
+    llm_client: Optional[Any] = None
 
     def __post_init__(self):
         if not self.install_dir or self.install_dir == Path():
