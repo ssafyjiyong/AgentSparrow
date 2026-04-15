@@ -17,7 +17,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['C:\\Exception\\02_Workspace\\90_personal\\01_Lab\\AgentSparrow\\main.py'],
+    ['C:\\Exception\\Downloads\\AgentSparrow\\.claude\\worktrees\\unruffled-hypatia\\main.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

@@ -21,6 +21,9 @@ KO_ONLY_FILE_PATTERNS = [
     re.compile(r".*한국.*", re.IGNORECASE),
     re.compile(r".*_ko\..*"),
     re.compile(r".*-ko\..*"),
+    # 번역 시 글자수 허용치(50자)를 초과하여 백엔드 구동을 저해하는 파일
+    re.compile(r"^mici-guide\.profile$", re.IGNORECASE),
+    re.compile(r"^sswd-guide\.profile$", re.IGNORECASE),
 ]
 
 
