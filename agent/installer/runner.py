@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 from agent.config import AgentConfig
-from agent.llm.base import LLMClient
+from agent.cli import ensure_llm_client
+
+# Sparrow 구동 모듈 목록 (logs/<module>/ 하위에서 로그 탐색)
+RUNTIME_MODULES = [
+    "backend", "dast", "db", "frontend", "gateway",
+    "plugin", "sast", "sca", "update",
+]
 
 # 로그 Tail 줄 수
 LOG_TAIL_LINES = 100
@@ -109,68 +115,140 @@ def _stream_process(args: list, cwd: str) -> int:
         return 1
 
 
-def _collect_log_tail(config: AgentConfig, lines: int = LOG_TAIL_LINES) -> str:
-    log_dirs = []
-    if config.base_dir:
-        log_dirs.extend([
-            config.base_dir / "ops" / "logs",
-            config.base_dir / "logs",
-        ])
+def _tail_log_file(log_file: Path, lines: int, base_dir: Path) -> Optional[str]:
+    """단일 로그 파일을 tail 하고, 오류 라인이 있으면 그것만, 아니면 일반 tail을 반환."""
+    try:
+        content = log_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
 
-    collected_logs = []
+    file_lines = content.splitlines()
+    tail = file_lines[-lines:] if len(file_lines) > lines else file_lines
 
-    for log_dir in log_dirs:
-        if not log_dir.exists():
-            continue
-        for log_file in log_dir.rglob("*.log"):
-            try:
-                content = log_file.read_text(encoding="utf-8", errors="replace")
-                file_lines = content.splitlines()
-                tail = file_lines[-lines:] if len(file_lines) > lines else file_lines
-
-                error_lines = [
-                    l for l in tail
-                    if "ERROR" in l or "FATAL" in l or "Exception" in l
-                ]
-
-                if error_lines:
-                    collected_logs.append(
-                        f"\n=== {log_file.relative_to(config.base_dir)} ===\n"
-                        + "\n".join(error_lines[-30:])
-                    )
-            except Exception:
-                continue
-
-    if not collected_logs:
-        for log_dir in log_dirs:
-            if not log_dir.exists():
-                continue
-            log_files = sorted(
-                log_dir.rglob("*.log"),
-                key=lambda p: p.stat().st_mtime if p.exists() else 0,
-                reverse=True,
-            )
-            if log_files:
-                try:
-                    content = log_files[0].read_text(encoding="utf-8", errors="replace")
-                    file_lines = content.splitlines()
-                    tail = file_lines[-lines:]
-                    return f"=== {log_files[0].name} (최근 {len(tail)}줄) ===\n" + "\n".join(tail)
-                except Exception:
-                    pass
-
-    return "\n".join(collected_logs) if collected_logs else "수집된 로그가 없습니다."
-
-
-def _analyze_failure(config: AgentConfig, llm_client: LLMClient, context: str):
-    """실패 시 LLM을 사용하여 로그를 분석합니다."""
-    print()
-    print("  [LLM] 오류 로그를 분석합니다...")
-
-    log_content = _collect_log_tail(config)
+    error_lines = [
+        l for l in tail
+        if "ERROR" in l or "FATAL" in l or "Exception" in l
+    ]
 
     try:
-        print("  [SCAN] 로그 분석 중...")
+        rel = log_file.relative_to(base_dir)
+    except ValueError:
+        rel = log_file
+
+    if error_lines:
+        return f"\n=== {rel} ===\n" + "\n".join(error_lines[-30:])
+    if tail:
+        return f"\n=== {rel} (최근 {len(tail)}줄) ===\n" + "\n".join(tail)
+    return None
+
+
+def _collect_install_logs(config: AgentConfig, lines: int = LOG_TAIL_LINES) -> str:
+    """
+    설치 실패 시: base_dir/ops/logs 하위의 로그를 수집합니다.
+    (예: C:/Sparrow/sparrow-enterprise-server-windows-2603.2/ops/logs)
+    """
+    if not config.base_dir:
+        return "BASE_DIR이 설정되지 않아 로그를 수집할 수 없습니다."
+
+    log_dir = config.base_dir / "ops" / "logs"
+    if not log_dir.exists():
+        return f"설치 로그 디렉터리가 존재하지 않습니다: {log_dir}"
+
+    collected = []
+    for log_file in sorted(
+        log_dir.rglob("*.log"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    ):
+        chunk = _tail_log_file(log_file, lines, config.base_dir)
+        if chunk:
+            collected.append(chunk)
+
+    return "\n".join(collected) if collected else "수집된 설치 로그가 없습니다."
+
+
+def _collect_runtime_logs(
+    config: AgentConfig,
+    failed_modules: Optional[list] = None,
+    lines: int = LOG_TAIL_LINES,
+) -> str:
+    """
+    구동 실패 시: base_dir/logs/<module>/*.log 에서 구동 실패한 모듈의 로그 수집.
+    failed_modules가 비어 있으면 구동 모듈 전체를 스캔합니다.
+    """
+    if not config.base_dir:
+        return "BASE_DIR이 설정되지 않아 로그를 수집할 수 없습니다."
+
+    log_root = config.base_dir / "logs"
+    if not log_root.exists():
+        return f"구동 로그 디렉터리가 존재하지 않습니다: {log_root}"
+
+    modules_to_scan = failed_modules if failed_modules else RUNTIME_MODULES
+    collected = []
+
+    for module in modules_to_scan:
+        module_dir = log_root / module
+        if not module_dir.exists():
+            continue
+        # 모듈별로 최근 수정된 로그 파일 우선 순회
+        log_files = sorted(
+            module_dir.rglob("*.log"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        )
+        for log_file in log_files[:3]:  # 모듈당 최근 3개까지
+            chunk = _tail_log_file(log_file, lines, config.base_dir)
+            if chunk:
+                collected.append(chunk)
+
+    if not collected:
+        header = (
+            f"대상 모듈: {', '.join(modules_to_scan)}\n"
+            if modules_to_scan else ""
+        )
+        return header + "수집된 구동 로그가 없습니다."
+    return "\n".join(collected)
+
+
+def _analyze_failure(
+    config: AgentConfig,
+    context: str,
+    phase: str,
+    failed_modules: Optional[list] = None,
+):
+    """
+    실패 시 로그를 수집하고, (필요 시 지연 초기화된) LLM으로 분석합니다.
+
+    phase:
+        "install" - 설치 실패. ops/logs 수집.
+        "runtime" - 구동 실패. logs/<module> 수집.
+    """
+    print()
+    if phase == "install":
+        print("  [LOG] 설치 로그 수집: ops/logs")
+        log_content = _collect_install_logs(config)
+    else:
+        modules_str = (
+            ", ".join(failed_modules) if failed_modules else "(전체 구동 모듈)"
+        )
+        print(f"  [LOG] 구동 로그 수집: logs/{{{modules_str}}}")
+        log_content = _collect_runtime_logs(config, failed_modules)
+
+    reason = "설치 실패 로그 분석" if phase == "install" else "구동 실패 로그 분석"
+    llm_client = ensure_llm_client(config, reason=reason)
+
+    if llm_client is None:
+        print()
+        print("  [WARN] LLM 클라이언트가 없어 원시 로그만 출력합니다.")
+        print("  " + "-" * 60)
+        excerpt = log_content[:5000] if log_content else "로그 없음"
+        for line in excerpt.splitlines():
+            print(f"  {line}")
+        print("  " + "-" * 60)
+        return
+
+    try:
+        print("  [SCAN] LLM 로그 분석 중...")
         analysis = llm_client.analyze_log(log_content, context)
         print()
         print("  " + "=" * 60)
@@ -190,14 +268,11 @@ def _analyze_failure(config: AgentConfig, llm_client: LLMClient, context: str):
         print("  " + "-" * 60)
 
 
-def _check_via_status(config: AgentConfig) -> bool:
-    """
-    status 스크립트를 실행하여 서버 모듈 구동 여부를 확인합니다.
-    (pid XXXXX) 패턴이 5개 이상 발견되면 서버가 정상 구동 중으로 판단합니다.
-    """
+def _run_status_script(config: AgentConfig) -> str:
+    """status 스크립트 실행 후 출력(stdout+stderr)을 반환. 실패 시 빈 문자열."""
     status_script = _find_script(config.base_dir, "status", config.is_windows)
     if not status_script:
-        return False
+        return ""
 
     if config.is_windows:
         args = ["cmd", "/c", str(status_script)]
@@ -214,14 +289,41 @@ def _check_via_status(config: AgentConfig) -> bool:
             errors="replace",
             timeout=60,
         )
-        output = _strip_ansi(result.stdout + result.stderr)
-        started = len(re.findall(r"\(pid\s+\d+\)", output))
-        return started >= 5
+        return _strip_ansi(result.stdout + result.stderr)
     except Exception:
+        return ""
+
+
+def _check_via_status(config: AgentConfig) -> bool:
+    """(pid XXXXX) 패턴이 5개 이상이면 정상 구동으로 판단."""
+    output = _run_status_script(config)
+    if not output:
         return False
+    started = len(re.findall(r"\(pid\s+\d+\)", output))
+    return started >= 5
 
 
-def run_server(config: AgentConfig, llm_client: LLMClient) -> bool:
+def _detect_failed_modules(config: AgentConfig) -> list:
+    """
+    status 스크립트 출력에서 구동 실패한 모듈을 추정합니다.
+    각 라인에 모듈명이 등장하는데 (pid XXXXX) 가 붙어 있지 않으면 실패로 간주합니다.
+    탐지에 실패하면 빈 리스트 반환 → 전체 모듈을 스캔합니다.
+    """
+    output = _run_status_script(config)
+    if not output:
+        return []
+
+    failed = []
+    for line in output.splitlines():
+        low = line.lower()
+        for module in RUNTIME_MODULES:
+            if module in low and not re.search(r"\(pid\s+\d+\)", line):
+                if module not in failed:
+                    failed.append(module)
+    return failed
+
+
+def run_server(config: AgentConfig) -> bool:
     """
     설치 → 구동 순서로 Sparrow를 설치합니다.
 
@@ -256,7 +358,11 @@ def run_server(config: AgentConfig, llm_client: LLMClient) -> bool:
 
     if install_rc != 0:
         print(f"\n  [FAIL] install 스크립트 실패 (exit code: {install_rc})")
-        _analyze_failure(config, llm_client, f"install 스크립트 비정상 종료 (exit code: {install_rc})")
+        _analyze_failure(
+            config,
+            context=f"install 스크립트 비정상 종료 (exit code: {install_rc})",
+            phase="install",
+        )
         return False
 
     print(f"\n  [ OK ] install 완료 (exit code: {install_rc})")
@@ -296,11 +402,16 @@ def run_server(config: AgentConfig, llm_client: LLMClient) -> bool:
 
         print(f"  [FAIL] 서버 구동 확인 실패 (시도 {attempt}/{MAX_RETRY})")
 
+        failed_modules = _detect_failed_modules(config)
+        if failed_modules:
+            print(f"  [DETECT] 실패 모듈: {', '.join(failed_modules)}")
+
         if attempt < MAX_RETRY:
             _analyze_failure(
                 config,
-                llm_client,
-                f"서버 구동 실패 (시도 {attempt}/{MAX_RETRY})",
+                context=f"서버 구동 실패 (시도 {attempt}/{MAX_RETRY})",
+                phase="runtime",
+                failed_modules=failed_modules,
             )
             print()
             print(f"  >> {RETRY_DELAY}초 후 재시도합니다...")
@@ -308,8 +419,9 @@ def run_server(config: AgentConfig, llm_client: LLMClient) -> bool:
         else:
             _analyze_failure(
                 config,
-                llm_client,
-                f"서버 구동 최종 실패 ({MAX_RETRY}회 시도 모두 실패)",
+                context=f"서버 구동 최종 실패 ({MAX_RETRY}회 시도 모두 실패)",
+                phase="runtime",
+                failed_modules=failed_modules,
             )
 
     return False

@@ -28,7 +28,6 @@ from agent.installer.extractor import extract_package
 from agent.installer.properties import patch_properties
 from agent.installer.profiles import patch_profiles
 from agent.installer.runner import run_server
-from agent.llm.base import create_llm_client
 from agent.utils.network import get_local_ipv4
 
 
@@ -105,8 +104,6 @@ def main():
             print("\n  [FAIL] 설정이 취소되었습니다.")
             sys.exit(1)
 
-        llm_client = create_llm_client(config.llm_provider, config.api_key)
-
         print("  >> 네트워크 IP 추출 중...")
         local_ip = get_local_ipv4()
         if not local_ip:
@@ -160,7 +157,7 @@ def main():
         # ══════════════════════════════════════════════════════════════
         print_step(5, 5, "DB 프로파일 다국어 패치")
 
-        if not patch_profiles(config, llm_client):
+        if not patch_profiles(config):
             print("  [WARN] 프로파일 패치에 일부 문제가 발생했습니다.")
 
         if not ask_continue("DB 프로파일 패치 완료. 서버 설치 및 구동을 시작하시겠습니까?"):
@@ -174,7 +171,7 @@ def main():
         print("  >> 설치 순서: install 스크립트 → start 스크립트")
         print()
 
-        if run_server(config, llm_client):
+        if run_server(config):
             print()
             modules_str = (
                 ", ".join(m.upper() for m in config.enabled_optional_modules)
@@ -190,7 +187,8 @@ def main():
             print(f"  접속 주소  : http://{config.local_ip}:{10880}")
             print(f"  언어 설정  : {config.language.value}")
             print(f"  활성 모듈  : {modules_str}")
-            print(f"  LLM 제공자 : {llm_client.get_provider_name()}")
+            if config.llm_client is not None:
+                print(f"  LLM 제공자 : {config.llm_client.get_provider_name()}")
             print("=" * 70)
             _wait_if_exe()
         else:
